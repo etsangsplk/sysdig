@@ -36,6 +36,7 @@ along with sysdig.  If not, see <http://www.gnu.org/licenses/>.
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 32))
 #define CAPTURE_SIGNAL_DELIVERIES
 #endif
+#define CAPTURE_PAGE_FAULTS
 #define RW_SNAPLEN 80
 #define RW_SNAPLEN_EVENT 4096
 #define RW_MAX_SNAPLEN (256 * 1024 * 1024)

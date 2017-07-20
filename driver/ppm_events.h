@@ -35,6 +35,31 @@ along with sysdig.  If not, see <http://www.gnu.org/licenses/>.
 /*
  * Various crap that a callback might need
  */
+union event_info_t {
+	struct {
+		struct pt_regs *regs;
+		long id;
+		const enum ppm_syscall_code *cur_g_syscall_code_routing_table;
+	} syscall_data;
+
+	struct {
+		struct task_struct *sched_prev;
+		struct task_struct *sched_next;
+	} context_data;
+
+	struct {
+		int sig;
+		struct siginfo *info;
+		struct k_sigaction *ka;
+	} signal_data;
+
+	struct {
+		unsigned long address;
+		struct pt_regs *regs;
+		unsigned long error_code;
+	} fault_data;
+};
+
 struct event_filler_arguments {
 	struct ppm_consumer_t *consumer;
 	char *buffer; /* the buffer that will be filled with the data */
@@ -63,6 +88,7 @@ struct event_filler_arguments {
 	int signo; /* Signal number */
 	__kernel_pid_t spid; /* PID of source process */
 	__kernel_pid_t dpid; /* PID of destination process */
+	union event_info_t event_info; /* For page faults. Eventually move all the other per-event params in this */
 };
 
 /*

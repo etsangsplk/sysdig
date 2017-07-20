@@ -86,25 +86,7 @@ struct event_data_t {
 	enum ppm_capture_category category;
 	int socketcall_syscall;
 	bool compat;
-
-	union {
-		struct {
-			struct pt_regs *regs;
-			long id;
-			const enum ppm_syscall_code *cur_g_syscall_code_routing_table;
-		} syscall_data;
-
-		struct {
-			struct task_struct *sched_prev;
-			struct task_struct *sched_next;
-		} context_data;
-
-		struct {
-			int sig;
-			struct siginfo *info;
-			struct k_sigaction *ka;
-		} signal_data;
-	} event_info;
+	union event_info_t event_info;
 };
 
 /*
@@ -150,6 +132,11 @@ TRACEPOINT_PROBE(sched_switch_probe, bool preempt, struct task_struct *prev, str
 TRACEPOINT_PROBE(signal_deliver_probe, int sig, struct siginfo *info, struct k_sigaction *ka);
 #endif
 
+#ifdef CAPTURE_PAGE_FAULTS
+TRACEPOINT_PROBE(page_fault_user_probe, unsigned long address, struct pt_regs *regs, unsigned long error_code);
+TRACEPOINT_PROBE(page_fault_kernel_probe, unsigned long address, struct pt_regs *regs, unsigned long error_code);
+#endif
+
 DECLARE_BITMAP(g_events_mask, PPM_EVENT_MAX);
 static struct ppm_device *g_ppm_devs;
 static struct class *g_ppm_class;
@@ -182,6 +169,10 @@ static struct tracepoint *tp_sched_switch;
 #endif
 #ifdef CAPTURE_SIGNAL_DELIVERIES
 static struct tracepoint *tp_signal_deliver;
+#endif
+#ifdef CAPTURE_PAGE_FAULTS
+static struct tracepoint *tp_page_fault_user;
+static struct tracepoint *tp_page_fault_kernel;
 #endif
 
 #ifdef _DEBUG
@@ -465,6 +456,20 @@ static int ppm_open(struct inode *inode, struct file *filp)
 			goto err_signal_deliver;
 		}
 #endif
+
+#ifdef CAPTURE_PAGE_FAULTS
+		ret = compat_register_trace(page_fault_user_probe, "page_fault_user", tp_page_fault_user);
+		if (ret) {
+			pr_err("can't create the page_fault_user tracepoint\n");
+			goto err_page_fault_user;
+		}
+
+		ret = compat_register_trace(page_fault_kernel_probe, "page_fault_kernel", tp_page_fault_kernel);
+		if (ret) {
+			pr_err("can't create the page_fault_kernel tracepoint\n");
+			goto err_page_fault_kernel;
+		}
+#endif
 		g_tracepoint_registered = true;
 	}
 
@@ -472,9 +477,15 @@ static int ppm_open(struct inode *inode, struct file *filp)
 
 	goto cleanup_open;
 
+#ifdef CAPTURE_PAGE_FAULTS
+err_page_fault_kernel:
+	compat_unregister_trace(sched_switch_probe, "page_fault_user", tp_page_fault_user);
+err_page_fault_user:
+	compat_unregister_trace(sched_switch_probe, "signal_deliver", tp_signal_deliver);
+#endif
 #ifdef CAPTURE_SIGNAL_DELIVERIES
 err_signal_deliver:
-	compat_unregister_trace(sched_switch_probe, "signal_switch", tp_signal_deliver);
+	compat_unregister_trace(sched_switch_probe, "sched_switch", tp_sched_switch);
 #endif
 err_sched_switch:
 	compat_unregister_trace(syscall_procexit_probe, "sched_process_exit", tp_sched_process_exit);
@@ -570,6 +581,10 @@ static int ppm_release(struct inode *inode, struct file *filp)
 #endif
 #ifdef CAPTURE_SIGNAL_DELIVERIES
 			compat_unregister_trace(signal_deliver_probe, "signal_deliver", tp_signal_deliver);
+#endif
+#ifdef CAPTURE_PAGE_FAULTS
+			compat_unregister_trace(page_fault_user_probe, "page_fault_user", tp_page_fault_user);
+			compat_unregister_trace(page_fault_kernel_probe, "page_fault_kernel", tp_page_fault_kernel);
 #endif
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 20)
 			tracepoint_synchronize_unregister();
@@ -1575,6 +1590,10 @@ static int record_event_consumer(struct ppm_consumer_t *consumer,
 		}
 		args.dpid = current->pid;
 
+		if (event_datap->category == PPMC_PAGE_FAULT) {
+			args.event_info.fault_data = event_datap->event_info.fault_data;
+		}
+
 		args.curarg = 0;
 		args.arg_data_size = args.buffer_size - args.arg_data_offset;
 		args.nevents = ring->nevents;
@@ -1875,6 +1894,31 @@ TRACEPOINT_PROBE(signal_deliver_probe, int sig, struct siginfo *info, struct k_s
 }
 #endif
 
+#ifdef CAPTURE_PAGE_FAULTS
+static void page_fault_probe(enum ppm_event_type event_type, unsigned long address, struct pt_regs *regs, unsigned long error_code)
+{
+	/* XXX: see if it's reasonable to filter out kernel threads */
+	struct event_data_t event_data;
+
+	event_data.category = PPMC_PAGE_FAULT;
+	event_data.event_info.fault_data.address = address;
+	event_data.event_info.fault_data.regs = regs;
+	event_data.event_info.fault_data.error_code = error_code;
+
+	record_event_all_consumers(event_type, UF_ALWAYS_DROP, &event_data);
+}
+
+TRACEPOINT_PROBE(page_fault_user_probe, unsigned long address, struct pt_regs *regs, unsigned long error_code)
+{
+	page_fault_probe(PPME_PAGE_FAULT_USER_E, address, regs, error_code);
+}
+
+TRACEPOINT_PROBE(page_fault_kernel_probe, unsigned long address, struct pt_regs *regs, unsigned long error_code)
+{
+	page_fault_probe(PPME_PAGE_FAULT_KERNEL_E, address, regs, error_code);
+}
+#endif
+
 static int init_ring_buffer(struct ppm_ring_buffer_context *ring)
 {
 	unsigned int j;
@@ -1980,6 +2024,12 @@ static void visit_tracepoint(struct tracepoint *tp, void *priv)
 	else if (!strcmp(tp->name, "signal_deliver"))
 		tp_signal_deliver = tp;
 #endif
+#ifdef CAPTURE_PAGE_FAULTS
+	else if (!strcmp(tp->name, "page_fault_user"))
+		tp_page_fault_user = tp;
+	else if (!strcmp(tp->name, "page_fault_kernel"))
+		tp_page_fault_kernel = tp;
+#endif
 }
 
 static int get_tracepoint_handles(void)
@@ -2007,6 +2057,16 @@ static int get_tracepoint_handles(void)
 #ifdef CAPTURE_SIGNAL_DELIVERIES
 	if (!tp_signal_deliver) {
 		pr_err("failed to find signal_deliver tracepoint\n");
+		return -ENOENT;
+	}
+#endif
+#ifdef CAPTURE_PAGE_FAULTS
+	if (!tp_page_fault_user) {
+		pr_err("failed to find page_fault_user tracepoint\n");
+		return -ENOENT;
+	}
+	if (!tp_page_fault_kernel) {
+		pr_err("failed to find page_fault_kernel tracepoint\n");
 		return -ENOENT;
 	}
 #endif
