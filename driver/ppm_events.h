@@ -88,7 +88,7 @@ struct event_filler_arguments {
 	int signo; /* Signal number */
 	__kernel_pid_t spid; /* PID of source process */
 	__kernel_pid_t dpid; /* PID of destination process */
-	union event_info_t event_info; /* For page faults. Eventually move all the other per-event params in this */
+	union event_info_t event_info; /* For page faults. XXX move all the other per-event params in this, not good to waste kernel stack */
 };
 
 /*

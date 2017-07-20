@@ -132,6 +132,7 @@ TRACEPOINT_PROBE(sched_switch_probe, bool preempt, struct task_struct *prev, str
 TRACEPOINT_PROBE(signal_deliver_probe, int sig, struct siginfo *info, struct k_sigaction *ka);
 #endif
 
+/* XXX make sure to use the right kernel version */
 #ifdef CAPTURE_PAGE_FAULTS
 TRACEPOINT_PROBE(page_fault_user_probe, unsigned long address, struct pt_regs *regs, unsigned long error_code);
 TRACEPOINT_PROBE(page_fault_kernel_probe, unsigned long address, struct pt_regs *regs, unsigned long error_code);
@@ -458,6 +459,7 @@ static int ppm_open(struct inode *inode, struct file *filp)
 #endif
 
 #ifdef CAPTURE_PAGE_FAULTS
+		/* XXX introduce a module cmdline param so we don't capture all these by default since can be heavy */
 		ret = compat_register_trace(page_fault_user_probe, "page_fault_user", tp_page_fault_user);
 		if (ret) {
 			pr_err("can't create the page_fault_user tracepoint\n");
